@@ -1,5 +1,3 @@
-// server.js
-
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -37,20 +35,24 @@ connectDB();
 
 // Middlewares
 app.use(express.json({ limit: '10mb' }));
+
+// CONFIGURACIÓN CORS CORREGIDA - AGREGA EL DOMINIO ESPECÍFICO DE VERCEL
 app.use(cors({
   origin: [
     'http://localhost:3000',
     'http://localhost:5173',
     'https://pwa-back-nuevo-1.onrender.com',
-    'https://pwa-front-nuevo.vercel.app',                     // ← TU FRONTEND PRINCIPAL
-    'https://pwa-front-nuevo-git-main-rockbonsai2004.vercel.app', // ← DEPLOY DE GIT MAIN
-    'https://pwa-front-nuevo-*.vercel.app',                  // ← TODOS LOS PREVIEWS
-    'https://pwa-front-nuevo-rockbonsai2004.vercel.app'      // ← POR SI ACASO
+    'https://pwa-front-nuevo.vercel.app',
+    'https://pwa-front-nuevo-git-main-rockbonsai2004.vercel.app',
+    'https://pwa-front-nuevo-*.vercel.app',
+    'https://pwa-front-nuevo-rockbonsai2004.vercel.app',
+    'https://pwa-front-nuevo-rnorx37gf-bruno-fixs-projects.vercel.app', // ← ¡AGREGA ESTE!
+    'https://pwa-front-nuevo-rnorx37gf-bruno-felixs-projects.vercel.app' // ← ¡Y ESTE TAMBIÉN!
   ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
-}))
+}));
 
 // Middleware de logging mejorado
 app.use((req, res, next) => {
@@ -154,8 +156,31 @@ app.get('/', (req, res) => {
   });
 });
 
-// Middleware para manejar CORS pre-flight
-app.options('*', cors());
+// MANEJO DE PREFLIGHT OPTIONS - VERSIÓN MEJORADA
+app.options('*', (req, res) => {
+  const origin = req.headers.origin;
+  const allowedOrigins = [
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'https://pwa-back-nuevo-1.onrender.com',
+    'https://pwa-front-nuevo.vercel.app',
+    'https://pwa-front-nuevo-git-main-rockbonsai2004.vercel.app',
+    'https://pwa-front-nuevo-*.vercel.app',
+    'https://pwa-front-nuevo-rockbonsai2004.vercel.app',
+    'https://pwa-front-nuevo-rnorx37gf-bruno-fixs-projects.vercel.app',
+    'https://pwa-front-nuevo-rnorx37gf-bruno-felixs-projects.vercel.app'
+  ];
+  
+  if (origin && allowedOrigins.some(allowed => origin.includes(allowed.replace('*', '')))) {
+    res.header('Access-Control-Allow-Origin', origin);
+  }
+  
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Max-Age', '86400');
+  res.status(200).end();
+});
 
 // Manejo de rutas no encontradas
 app.use('*', (req, res) => {
