@@ -41,11 +41,16 @@ app.use(cors({
   origin: [
     'http://localhost:3000',
     'http://localhost:5173',
-    'https://pwa-back-nuevo-1.onrender.com'
-
+    'https://pwa-back-nuevo-1.onrender.com',
+    'https://pwa-front-nuevo.vercel.app',                     // ← TU FRONTEND PRINCIPAL
+    'https://pwa-front-nuevo-git-main-rockbonsai2004.vercel.app', // ← DEPLOY DE GIT MAIN
+    'https://pwa-front-nuevo-*.vercel.app',                  // ← TODOS LOS PREVIEWS
+    'https://pwa-front-nuevo-rockbonsai2004.vercel.app'      // ← POR SI ACASO
   ],
-  credentials: true
-}));
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
+}))
 
 // Middleware de logging mejorado
 app.use((req, res, next) => {
