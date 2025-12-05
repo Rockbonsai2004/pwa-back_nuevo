@@ -41,7 +41,8 @@ app.use(cors({
   origin: [
     'http://localhost:3000',
     'http://localhost:5173',
-    'https://frontendxdxd.vercel.app'
+    'https://pwa-back-nuevo-1.onrender.com'
+
   ],
   credentials: true
 }));
