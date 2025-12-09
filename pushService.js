@@ -167,14 +167,19 @@ class PushService {
 
       console.log('📦 Payload preparado');
       
-      // Enviar con opciones específicas
-      const result = await webpush.sendNotification(subscription, payload, {
+      // ¡CORRECCIÓN AQUÍ! - SIN HEADERS DUPLICADOS
+      const sendOptions = {
         TTL: options.TTL || 86400,
-        urgency: options.urgency || 'normal',
-        headers: {
-          'TTL': options.TTL || 86400
-        }
-      });
+        urgency: options.urgency || 'normal'
+        // NO agregues 'headers' aquí a menos que sea necesario
+      };
+      
+      // Si necesitas headers personalizados (sin TTL duplicado)
+      if (options.customHeaders) {
+        sendOptions.headers = options.customHeaders;
+      }
+      
+      const result = await webpush.sendNotification(subscription, payload, sendOptions);
       
       console.log('✅ Notificación enviada exitosamente');
       console.log('📊 Status:', result?.statusCode);
@@ -332,9 +337,8 @@ class PushService {
     }
   }
 
-  // ==================== MÉTODOS ADICIONALES (mantén los que ya tienes) ====================
+  // ==================== ENVIAR A MÚLTIPLES USUARIOS ====================
   async sendNotificationToUsers(userIds, title, options = {}) {
-    // Mantén tu implementación actual
     try {
       if (!vapidConfigured) {
         return {
