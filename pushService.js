@@ -4,58 +4,126 @@ import User from './models/User.js';
 
 dotenv.config();
 
-// VERIFICAR CLAVES VAPID ANTES DE CONFIGURAR
-const checkVapidKeys = () => {
-  if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
-    console.error('❌ ERROR: Claves VAPID no configuradas');
-    console.error('💡 Agrega en Render: VAPID_PUBLIC_KEY y VAPID_PRIVATE_KEY');
+// ==================== CONFIGURACIÓN VAPID MEJORADA ====================
+const configureVAPID = () => {
+  console.log('\n=== 🔔 CONFIGURANDO VAPID ===');
+  
+  // Verificar existencia de claves
+  const hasPublicKey = process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PUBLIC_KEY.length > 0;
+  const hasPrivateKey = process.env.VAPID_PRIVATE_KEY && process.env.VAPID_PRIVATE_KEY.length > 0;
+  const hasEmail = process.env.VAPID_EMAIL && process.env.VAPID_EMAIL.length > 0;
+  
+  console.log(`✅ Clave pública: ${hasPublicKey ? 'PRESENTE' : 'FALTANTE'}`);
+  console.log(`✅ Clave privada: ${hasPrivateKey ? 'PRESENTE' : 'FALTANTE'}`);
+  console.log(`✅ Email VAPID: ${hasEmail ? process.env.VAPID_EMAIL : 'FALTANTE'}`);
+  
+  if (!hasPublicKey || !hasPrivateKey) {
+    console.error('\n❌ ERROR CRÍTICO: Faltan claves VAPID en .env');
+    console.error('💡 Solución: Agrega VAPID_PUBLIC_KEY y VAPID_PRIVATE_KEY a tu archivo .env');
+    console.error('📌 Ejecuta: npx web-push generate-vapid-keys');
     return false;
   }
   
-  if (!process.env.VAPID_EMAIL) {
+  if (!hasEmail) {
     console.warn('⚠️  VAPID_EMAIL no configurada, usando default');
     process.env.VAPID_EMAIL = 'notifications@example.com';
   }
   
-  return true;
-};
-
-// Configurar web-push solo si hay claves
-if (checkVapidKeys()) {
   try {
+    // Configurar web-push con detalles VAPID
     webpush.setVapidDetails(
       `mailto:${process.env.VAPID_EMAIL}`,
-      process.env.VAPID_PUBLIC_KEY,
-      process.env.VAPID_PRIVATE_KEY
+      process.env.VAPID_PUBLIC_KEY.trim(),
+      process.env.VAPID_PRIVATE_KEY.trim()
     );
-    console.log('✅ Web Push configurado con claves VAPID');
+    
+    console.log('✅ Web Push configurado correctamente');
+    console.log(`📌 Clave pública (primeros 50 chars): ${process.env.VAPID_PUBLIC_KEY.substring(0, 50)}...`);
+    console.log('=== 🔔 VAPID CONFIGURADO ===\n');
+    return true;
   } catch (error) {
     console.error('❌ Error configurando VAPID:', error.message);
+    console.error('💡 Verifica que las claves sean válidas y tengan formato correcto');
+    return false;
   }
-} else {
-  console.warn('⚠️  Notificaciones push DESACTIVADAS (falta configuración VAPID)');
-}
+};
+
+// Configurar VAPID al inicio
+const vapidConfigured = configureVAPID();
 
 class PushService {
   constructor() {
-    console.log('🔔 Servicio de notificaciones push inicializado');
+    if (!vapidConfigured) {
+      console.warn('⚠️  Servicio push iniciado SIN configuración VAPID');
+    } else {
+      console.log('🔔 Servicio de notificaciones push inicializado');
+    }
   }
 
-  // Guardar suscripción para un usuario
+  // ==================== GUARDAR SUSCRIPCIÓN MEJORADO ====================
   async saveSubscription(userId, subscription) {
     try {
+      console.log('\n📱 RECIBIENDO SUSCRIPCIÓN PUSH:');
+      console.log('Usuario ID:', userId);
+      console.log('Endpoint:', subscription?.endpoint?.substring(0, 80) + '...');
+      console.log('Tiene keys.p256dh:', !!subscription?.keys?.p256dh);
+      console.log('Tiene keys.auth:', !!subscription?.keys?.auth);
+      
+      if (!vapidConfigured) {
+        throw new Error('Servicio push no configurado. Faltan claves VAPID.');
+      }
+
       const user = await User.findById(userId);
       
       if (!user) {
         throw new Error('Usuario no encontrado');
       }
 
-      await user.addPushSubscription(subscription);
+      // Validar estructura de la suscripción
+      if (!subscription || !subscription.endpoint || !subscription.keys) {
+        throw new Error('Estructura de suscripción inválida');
+      }
+
+      if (!subscription.keys.p256dh || !subscription.keys.auth) {
+        throw new Error('Faltan claves p256dh o auth en la suscripción');
+      }
+
+      // Crear objeto de suscripción con estructura correcta
+      const subscriptionToSave = {
+        endpoint: subscription.endpoint,
+        keys: {
+          p256dh: subscription.keys.p256dh,
+          auth: subscription.keys.auth
+        },
+        createdAt: new Date()
+      };
+
+      console.log('💾 Guardando suscripción en base de datos...');
+
+      // Verificar si ya existe
+      const existingIndex = user.pushSubscriptions.findIndex(
+        sub => sub.endpoint === subscriptionToSave.endpoint
+      );
+
+      if (existingIndex !== -1) {
+        // Actualizar existente
+        user.pushSubscriptions[existingIndex] = subscriptionToSave;
+        console.log('🔄 Actualizando suscripción existente');
+      } else {
+        // Agregar nueva
+        user.pushSubscriptions.push(subscriptionToSave);
+        console.log('➕ Nueva suscripción agregada');
+      }
+
+      await user.save();
       
-      console.log('📱 Nueva suscripción push guardada para usuario:', user.username);
+      console.log(`✅ Suscripción guardada para ${user.username}`);
+      console.log(`📊 Total suscripciones: ${user.pushSubscriptions.length}`);
+      
       return { 
         success: true, 
-        message: 'Suscripción guardada correctamente'
+        message: 'Suscripción guardada correctamente',
+        vapidPublicKey: process.env.VAPID_PUBLIC_KEY
       };
     } catch (error) {
       console.error('❌ Error guardando suscripción:', error);
@@ -63,116 +131,212 @@ class PushService {
     }
   }
 
-  // Enviar notificación a todos los usuarios
-  async sendNotificationToAll(title, options = {}) {
+  // ==================== ENVIAR NOTIFICACIÓN MEJORADO ====================
+  async sendNotification(subscription, title, options = {}) {
     try {
-      // Verificar si hay claves VAPID configuradas
-      if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
+      console.log('\n📤 ENVIANDO NOTIFICACIÓN:');
+      console.log('Título:', title);
+      console.log('Endpoint:', subscription?.endpoint?.substring(0, 60) + '...');
+      
+      if (!vapidConfigured) {
+        throw new Error('VAPID no configurado');
+      }
+
+      if (!subscription || !subscription.endpoint) {
+        throw new Error('Suscripción inválida: falta endpoint');
+      }
+
+      if (!subscription.keys || !subscription.keys.p256dh || !subscription.keys.auth) {
+        throw new Error('Suscripción inválida: faltan claves de encriptación');
+      }
+
+      const payload = JSON.stringify({
+        title: title,
+        body: options.body || 'Tienes una nueva notificación',
+        icon: options.icon || '/icons/icon-192x192.png',
+        image: options.image,
+        badge: '/icons/icon-72x72.png',
+        data: options.data || { 
+          url: '/',
+          timestamp: new Date().toISOString()
+        },
+        tag: options.tag || 'general',
+        timestamp: Date.now(),
+        vibrate: [200, 100, 200]
+      });
+
+      console.log('📦 Payload preparado');
+      
+      // Enviar con opciones específicas
+      const result = await webpush.sendNotification(subscription, payload, {
+        TTL: options.TTL || 86400,
+        urgency: options.urgency || 'normal',
+        headers: {
+          'TTL': options.TTL || 86400
+        }
+      });
+      
+      console.log('✅ Notificación enviada exitosamente');
+      console.log('📊 Status:', result?.statusCode);
+      
+      return { 
+        success: true,
+        statusCode: result?.statusCode,
+        headers: result?.headers,
+        message: 'Notificación enviada'
+      };
+      
+    } catch (error) {
+      console.error('❌ ERROR ENVIANDO NOTIFICACIÓN:');
+      console.error('Mensaje:', error.message);
+      console.error('Status Code:', error.statusCode);
+      console.error('Body:', error.body);
+      console.error('Endpoint:', subscription?.endpoint?.substring(0, 80));
+      
+      // Re-lanzar error con más contexto
+      const enhancedError = new Error(`Error enviando notificación: ${error.message}`);
+      enhancedError.statusCode = error.statusCode;
+      enhancedError.body = error.body;
+      enhancedError.originalError = error;
+      throw enhancedError;
+    }
+  }
+
+  // ==================== ENVIAR A USUARIO ESPECÍFICO ====================
+  async sendNotificationToUser(userId, title, options = {}) {
+    try {
+      console.log(`\n🎯 ENVIANDO NOTIFICACIÓN A USUARIO: ${userId}`);
+      console.log('Título:', title);
+      
+      if (!vapidConfigured) {
         return {
           success: false,
-          message: 'Notificaciones push no configuradas. Faltan claves VAPID.'
+          message: 'Notificaciones push no configuradas (VAPID faltante)'
         };
       }
 
-      const users = await User.find({ isActive: true }).populate('pushSubscriptions');
-      let totalSent = 0;
-      let totalFailed = 0;
+      const user = await User.findById(userId);
+      
+      if (!user) {
+        throw new Error(`Usuario ${userId} no encontrado`);
+      }
 
-      console.log(`📤 Enviando notificación a ${users.length} usuarios:`, title);
+      if (!user.pushSubscriptions || user.pushSubscriptions.length === 0) {
+        console.log(`ℹ️ Usuario ${user.username} no tiene suscripciones activas`);
+        return {
+          success: false,
+          message: 'El usuario no tiene suscripciones push activas',
+          username: user.username
+        };
+      }
 
-      for (const user of users) {
-        if (user.pushSubscriptions && user.pushSubscriptions.length > 0) {
-          for (const subscription of user.pushSubscriptions) {
-            try {
-              await this.sendNotification(subscription, title, options);
-              totalSent++;
-            } catch (error) {
-              totalFailed++;
-              console.error(`❌ Error enviando a ${user.username}:`, error.message);
-              
-              // Si la suscripción es inválida, eliminarla
-              if (error.statusCode === 410 || error.statusCode === 404) {
-                console.log(`🗑️  Eliminando suscripción expirada de ${user.username}`);
-                await user.removePushSubscription(subscription.endpoint);
-              }
-            }
+      console.log(`📊 Usuario: ${user.username}, Suscripciones: ${user.pushSubscriptions.length}`);
+
+      let sent = 0;
+      let failed = 0;
+      const errors = [];
+
+      for (const subscription of user.pushSubscriptions) {
+        try {
+          await this.sendNotification(subscription, title, options);
+          sent++;
+          console.log(`✅ Enviado a suscripción ${sent}`);
+        } catch (error) {
+          failed++;
+          errors.push({
+            endpoint: subscription.endpoint?.substring(0, 50) + '...',
+            error: error.message,
+            statusCode: error.statusCode
+          });
+          
+          console.error(`❌ Error en suscripción ${failed}:`, error.message);
+          
+          // Si la suscripción es inválida (410: Gone, 404: Not found), eliminarla
+          if (error.statusCode === 410 || error.statusCode === 404) {
+            console.log(`🗑️  Eliminando suscripción expirada/inválida`);
+            await user.removePushSubscription(subscription.endpoint);
           }
         }
       }
 
-      console.log(`✅ Notificaciones enviadas: ${totalSent} exitosas, ${totalFailed} fallidas`);
-      return {
-        success: true,
-        message: `Notificaciones enviadas: ${totalSent} exitosas, ${totalFailed} fallidas`,
-        results: {
-          sent: totalSent,
-          failed: totalFailed,
-          totalUsers: users.length
+      const result = {
+        success: sent > 0,
+        message: `Notificaciones a ${user.username}: ${sent} exitosas, ${failed} fallidas`,
+        details: {
+          username: user.username,
+          userId: user._id,
+          sent,
+          failed,
+          totalSubscriptions: user.pushSubscriptions.length
         }
       };
+
+      if (errors.length > 0) {
+        result.errors = errors;
+      }
+
+      console.log(`📊 Resultado: ${sent} ✓, ${failed} ✗`);
+      return result;
+
     } catch (error) {
-      console.error('❌ Error enviando notificaciones a todos:', error);
+      console.error('❌ Error en sendNotificationToUser:', error);
       throw error;
     }
   }
 
-  // Enviar notificación a un usuario específico
-  async sendNotificationToUser(userId, title, options = {}) {
+  // ==================== ENVIAR A TODOS ====================
+  async sendNotificationToAll(title, options = {}) {
     try {
-      // Verificar claves VAPID
-      if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
+      console.log(`\n📢 ENVIANDO NOTIFICACIÓN A TODOS LOS USUARIOS`);
+      console.log('Título:', title);
+      
+      if (!vapidConfigured) {
         return {
           success: false,
           message: 'Notificaciones push no configuradas'
         };
       }
 
-      const user = await User.findById(userId).populate('pushSubscriptions');
-      
-      if (!user) {
-        throw new Error('Usuario no encontrado');
-      }
+      const users = await User.find({ isActive: true });
+      let totalSent = 0;
+      let totalFailed = 0;
+      const userResults = [];
 
-      if (!user.pushSubscriptions || user.pushSubscriptions.length === 0) {
-        return {
-          success: false,
-          message: 'El usuario no tiene suscripciones push activas'
-        };
-      }
+      console.log(`👥 Total usuarios: ${users.length}`);
 
-      let sent = 0;
-      let failed = 0;
-
-      for (const subscription of user.pushSubscriptions) {
-        try {
-          await this.sendNotification(subscription, title, options);
-          sent++;
-        } catch (error) {
-          failed++;
-          console.error(`❌ Error enviando a ${user.username}:`, error.message);
+      for (const user of users) {
+        if (user.pushSubscriptions && user.pushSubscriptions.length > 0) {
+          const userResult = await this.sendNotificationToUser(user._id, title, options);
+          userResults.push(userResult);
           
-          if (error.statusCode === 410 || error.statusCode === 404) {
-            await user.removePushSubscription(subscription.endpoint);
+          if (userResult.success) {
+            totalSent += userResult.details?.sent || 0;
+            totalFailed += userResult.details?.failed || 0;
           }
         }
       }
 
       return {
-        success: sent > 0,
-        message: `Notificaciones enviadas a ${user.username}: ${sent} exitosas, ${failed} fallidas`,
-        results: { sent, failed }
+        success: totalSent > 0,
+        message: `Notificaciones enviadas: ${totalSent} exitosas, ${totalFailed} fallidas`,
+        results: {
+          totalSent,
+          totalFailed,
+          totalUsers: users.length,
+          userResults
+        }
       };
     } catch (error) {
-      console.error('❌ Error enviando notificación a usuario:', error);
+      console.error('❌ Error en sendNotificationToAll:', error);
       throw error;
     }
   }
 
-  // Enviar notificación a múltiples usuarios específicos
+  // ==================== MÉTODOS ADICIONALES (mantén los que ya tienes) ====================
   async sendNotificationToUsers(userIds, title, options = {}) {
+    // Mantén tu implementación actual
     try {
-      // Verificar claves VAPID
-      if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
+      if (!vapidConfigured) {
         return {
           success: false,
           message: 'Notificaciones push no configuradas'
@@ -182,46 +346,22 @@ class PushService {
       const users = await User.find({ 
         _id: { $in: userIds },
         isActive: true 
-      }).populate('pushSubscriptions');
+      });
 
       let totalSent = 0;
       let totalFailed = 0;
       const results = [];
 
-      console.log(`📤 Enviando notificación a ${users.length} usuarios específicos:`, title);
-
       for (const user of users) {
-        let userSent = 0;
-        let userFailed = 0;
-
-        if (user.pushSubscriptions && user.pushSubscriptions.length > 0) {
-          for (const subscription of user.pushSubscriptions) {
-            try {
-              await this.sendNotification(subscription, title, options);
-              userSent++;
-              totalSent++;
-            } catch (error) {
-              userFailed++;
-              totalFailed++;
-              console.error(`❌ Error enviando a ${user.username}:`, error.message);
-              
-              if (error.statusCode === 410 || error.statusCode === 404) {
-                await user.removePushSubscription(subscription.endpoint);
-              }
-            }
-          }
+        const result = await this.sendNotificationToUser(user._id, title, options);
+        results.push(result);
+        
+        if (result.success) {
+          totalSent += result.details?.sent || 0;
+          totalFailed += result.details?.failed || 0;
         }
-
-        results.push({
-          userId: user._id,
-          username: user.username,
-          sent: userSent,
-          failed: userFailed,
-          totalSubscriptions: user.pushSubscriptions?.length || 0
-        });
       }
 
-      console.log(`✅ Notificaciones enviadas a usuarios específicos: ${totalSent} exitosas, ${totalFailed} fallidas`);
       return {
         success: totalSent > 0,
         message: `Notificaciones enviadas: ${totalSent} exitosas, ${totalFailed} fallidas`,
@@ -232,134 +372,12 @@ class PushService {
         }
       };
     } catch (error) {
-      console.error('❌ Error enviando notificaciones a usuarios específicos:', error);
+      console.error('❌ Error en sendNotificationToUsers:', error);
       throw error;
     }
   }
 
-  // Enviar notificación a usuario por email
-  async sendNotificationToUserByEmail(userEmail, title, options = {}) {
-    try {
-      // Verificar claves VAPID
-      if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
-        return {
-          success: false,
-          message: 'Notificaciones push no configuradas'
-        };
-      }
-
-      // Validar email
-      if (!userEmail || typeof userEmail !== 'string') {
-        throw new Error('Email inválido');
-      }
-
-      // Buscar usuario por email
-      const user = await User.findOne({ 
-        email: userEmail.toLowerCase().trim(),
-        isActive: true 
-      }).populate('pushSubscriptions');
-      
-      if (!user) {
-        throw new Error(`Usuario con email ${userEmail} no encontrado`);
-      }
-
-      return await this.sendNotificationToUser(user._id, title, options);
-    } catch (error) {
-      console.error('❌ Error enviando notificación por email:', error);
-      throw error;
-    }
-  }
-
-  // Enviar notificación a múltiples usuarios por emails
-  async sendNotificationToUsersByEmails(userEmails, title, options = {}) {
-    try {
-      // Verificar claves VAPID
-      if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
-        return {
-          success: false,
-          message: 'Notificaciones push no configuradas'
-        };
-      }
-
-      // Validar emails
-      if (!userEmails || !Array.isArray(userEmails)) {
-        throw new Error('Se requiere un array de emails');
-      }
-
-      if (userEmails.length === 0) {
-        throw new Error('Se requiere al menos un email');
-      }
-
-      const users = await User.find({ 
-        email: { $in: userEmails.map(email => email.toLowerCase().trim()) },
-        isActive: true 
-      }).populate('pushSubscriptions');
-
-      if (users.length === 0) {
-        throw new Error('No se encontraron usuarios con los emails proporcionados');
-      }
-
-      const userIds = users.map(user => user._id);
-      return await this.sendNotificationToUsers(userIds, title, options);
-    } catch (error) {
-      console.error('❌ Error enviando notificaciones por emails:', error);
-      throw error;
-    }
-  }
-
-  // Enviar notificación individual - VERSIÓN MEJORADA
-  async sendNotification(subscription, title, options = {}) {
-    // Verificar que hay una suscripción válida
-    if (!subscription || !subscription.endpoint) {
-      throw new Error('Suscripción inválida');
-    }
-
-    const payload = JSON.stringify({
-      title: title,
-      body: options.body || 'Tienes una nueva notificación',
-      icon: options.icon || '/icons/icon-192x192.png',
-      image: options.image,
-      badge: '/icons/icon-72x72.png',
-      data: options.data || { url: '/' },
-      tag: options.tag || 'general',
-      timestamp: Date.now(),
-      requireInteraction: options.requireInteraction || false,
-      vibrate: options.vibrate || [200, 100, 200]
-    });
-
-    try {
-      console.log(`📤 Enviando notificación a: ${subscription.endpoint.substring(0, 50)}...`);
-      
-      const result = await webpush.sendNotification(subscription, payload, {
-        TTL: options.TTL || 86400, // 24 horas por defecto
-        urgency: options.urgency || 'normal'
-      });
-      
-      console.log('✅ Notificación enviada exitosamente');
-      return { 
-        success: true,
-        headers: result?.headers,
-        statusCode: result?.statusCode 
-      };
-      
-    } catch (error) {
-      console.error('❌ Error enviando notificación:', error.message);
-      console.error('🔍 Detalles:', {
-        endpoint: subscription.endpoint?.substring(0, 100),
-        statusCode: error.statusCode,
-        body: error.body
-      });
-      
-      // Re-lanzar el error con más información
-      error.details = {
-        endpoint: subscription.endpoint,
-        statusCode: error.statusCode
-      };
-      throw error;
-    }
-  }
-
-  // Eliminar suscripción de un usuario
+  // ==================== ELIMINAR SUSCRIPCIÓN ====================
   async removeSubscription(userId, endpoint) {
     try {
       const user = await User.findById(userId);
@@ -368,12 +386,16 @@ class PushService {
         throw new Error('Usuario no encontrado');
       }
 
+      const initialCount = user.pushSubscriptions.length;
       await user.removePushSubscription(endpoint);
-      console.log('🗑️ Suscripción eliminada para usuario:', user.username);
+      const finalCount = user.pushSubscriptions.length;
+      
+      console.log(`🗑️  Suscripción eliminada. De ${initialCount} a ${finalCount} suscripciones`);
       
       return {
         success: true,
-        message: 'Suscripción eliminada correctamente'
+        message: 'Suscripción eliminada correctamente',
+        removed: initialCount > finalCount
       };
     } catch (error) {
       console.error('❌ Error eliminando suscripción:', error);
@@ -381,7 +403,7 @@ class PushService {
     }
   }
 
-  // Obtener estadísticas
+  // ==================== ESTADÍSTICAS ====================
   async getStats() {
     try {
       const totalUsers = await User.countDocuments({ isActive: true });
@@ -400,11 +422,40 @@ class PushService {
         totalUsers,
         usersWithSubscriptions,
         totalSubscriptions,
-        vapidConfigured: !!(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY),
-        vapidPublicKey: process.env.VAPID_PUBLIC_KEY?.substring(0, 20) + '...' || 'No configurada'
+        vapidConfigured: vapidConfigured,
+        vapidPublicKey: process.env.VAPID_PUBLIC_KEY ? 
+          process.env.VAPID_PUBLIC_KEY.substring(0, 30) + '...' : 
+          'No configurada',
+        environment: process.env.NODE_ENV || 'development'
       };
     } catch (error) {
       console.error('❌ Error obteniendo estadísticas:', error);
+      throw error;
+    }
+  }
+
+  // ==================== ENVIAR POR EMAIL ====================
+  async sendNotificationToUserByEmail(userEmail, title, options = {}) {
+    try {
+      if (!vapidConfigured) {
+        return {
+          success: false,
+          message: 'Notificaciones push no configuradas'
+        };
+      }
+
+      const user = await User.findOne({ 
+        email: userEmail.toLowerCase().trim(),
+        isActive: true 
+      });
+      
+      if (!user) {
+        throw new Error(`Usuario con email ${userEmail} no encontrado`);
+      }
+
+      return await this.sendNotificationToUser(user._id, title, options);
+    } catch (error) {
+      console.error('❌ Error en sendNotificationToUserByEmail:', error);
       throw error;
     }
   }
